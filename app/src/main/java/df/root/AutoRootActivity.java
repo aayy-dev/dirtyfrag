@@ -74,13 +74,13 @@ public class AutoRootActivity extends Activity implements IReporter {
                     Log.e(TAG, "autoroot-activity: exploit exception", e);
                 } finally {
                     wl.release();
+                    runOnUiThread(this::finish);
                 }
             }, "dfroot-autoroot").start();
         } catch (Throwable t) {
             wl.release();
             Log.e(TAG, "autoroot-activity: failed to start exploit thread", t);
+            finish();
         }
-
-        finish();
     }
 }

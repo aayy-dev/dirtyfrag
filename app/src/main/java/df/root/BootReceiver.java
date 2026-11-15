@@ -40,10 +40,6 @@ public class BootReceiver extends BroadcastReceiver implements IReporter {
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        // Nothing can take the shellcode's /dev/df mutex a second time (see RootState), so a run
-        // started here would only hold a wakelock while it polls nodes that cannot move. Saying
-        // "already hooked, skipping" hides the one case a user needs in logcat: a boot that was
-        // hooked and never got a root.
         if (RootState.hooked()) {
             Log.i(TAG, "boot: /dev/df present, "
                     + (D2Writer.suPresent() ? "su present - already rooted this boot"
@@ -66,13 +62,13 @@ public class BootReceiver extends BroadcastReceiver implements IReporter {
         }
         boolean autoSoftReboot = deCtx.getSharedPreferences("dfroot", Context.MODE_PRIVATE)
                 .getBoolean("auto_soft_reboot", false);
-        // auto_soft_reboot=true: on success, ksud triggers its OWN soft reboot
-        // after late-load completes - so Zygisk/LSPosed modules (which need a
-        // fresh Zygote with the module loaded) become active in the same power
-        // session. With it off, the exploit still roots the device but nothing
-        // reboots. bootstrap reads this from the pref, not from argv.
         deCtx.getSharedPreferences("dfroot", Context.MODE_PRIVATE)
                 .edit().putBoolean("soft_reboot", autoSoftReboot).commit();
+
+        // goAsync() tells Android this broadcast is still being processed. Without it,
+        // Samsung kills the process group seconds after onReceive returns — taking the
+        // native exploit child process with it before it can load the kernel module.
+        final PendingResult pending = goAsync();
 
         PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dfroot:boot");
@@ -89,7 +85,6 @@ public class BootReceiver extends BroadcastReceiver implements IReporter {
                 } finally {
                     wl.release();
                 }
-                if (ok) armD2Vault(deCtx);
                 if (!ok && !RootState.hooked()) {
                     Log.i(TAG, "boot: failed and no hook established - disabling autorun");
                     context.getPackageManager().setComponentEnabledSetting(
@@ -100,9 +95,12 @@ public class BootReceiver extends BroadcastReceiver implements IReporter {
                     Log.i(TAG, "boot: rc!=0 but /dev/df present - another caller already "
                             + "hooked this boot, not disabling receiver");
                 }
+                pending.finish();
+                if (ok) armD2Vault(deCtx);
             }, "dfroot-boot").start();
         } catch (Throwable t) {
             wl.release();
+            pending.finish();
             Log.e(TAG, "boot: failed to start exploit thread", t);
         }
     }
