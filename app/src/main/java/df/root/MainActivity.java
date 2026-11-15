@@ -491,7 +491,7 @@ public class MainActivity extends Activity implements IReporter {
         // releases page. No newer release, no pill - the header stays the plain word.
         binding.updatePill.setOnClickListener(v -> {
             v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-            openUrl("https://github.com/mitschud/DirtyFrag/releases");
+            openUrl("https://github.com/aayy-dev/dirtyfrag/releases");
         });
         mExec.execute(this::checkForAppUpdate);
 
@@ -723,7 +723,7 @@ public class MainActivity extends Activity implements IReporter {
             ghRow.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
             ghRow.setOnClickListener(v2 -> {
                 v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                openUrl("https://github.com/mitschud/DirtyFrag");
+                openUrl("https://github.com/aayy-dev/dirtyfrag");
             });
             box.addView(ghRow, new android.widget.LinearLayout.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
@@ -1534,7 +1534,7 @@ public class MainActivity extends Activity implements IReporter {
     private void checkForAppUpdate() {
         try {
             java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
-                    new java.net.URL("https://api.github.com/repos/mitschud/DirtyFrag/releases/latest")
+                    new java.net.URL("https://api.github.com/repos/aayy-dev/dirtyfrag/releases/latest")
                             .openConnection();
             conn.setConnectTimeout(8000);
             conn.setReadTimeout(8000);

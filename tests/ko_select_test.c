@@ -92,7 +92,7 @@ int main(void)
               "a kernel that states its level always gets its own module");
     }
 
-    /* https://github.com/mitschud/DirtyFrag/issues/73 */
+    /* https://github.com/aayy-dev/dirtyfrag/issues/73 */
     check(17, 6, 6, "android15-6.6", 1, 0,
           "issue 73: Android 17 read against an android15-6.6 kernel still lands right");
     check(17, 5, 10, "android13-5.10", 2, 0,

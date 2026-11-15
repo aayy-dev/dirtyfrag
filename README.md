@@ -3,7 +3,7 @@
   Built for Samsung devices, with a <strong>One UI-inspired interface</strong>, KernelSU integration,<br />
   and no custom kernel or unlocked bootloader required on vulnerable devices.
 </p><p <p align="center">
-  <a href="https://github.com/mitschud/DirtyFrag/releases/latest"><img src="https://img.shields.io/github/v/release/mitschud/DirtyFrag?label=Release&color=brightgreen" alt="Release"></a>
+  <a href="https://github.com/aayy-dev/dirtyfrag/releases/latest"><img src="https://img.shields.io/github/v/release/aayy-dev/dirtyfrag?label=Release&color=brightgreen" alt="Release"></a>
   <img src="https://img.shields.io/badge/Android-12%2B-3DDC84?logo=android&logoColor=white" alt="Android 12+">
 <img src="https://img.shields.io/badge/%F0%9F%94%B5-One%20UI%209-555" alt="One UI 9">
   <img src="https://img.shields.io/badge/SU-KernelSU-555" alt="KernelSU">
@@ -11,8 +11,8 @@
     <img src="https://img.shields.io/badge/License-GPL--2.0--only-555" alt="GPL-2.0-only">
   </a>
 </p><p>
-  <a href="https://github.com/mitschud/DirtyFrag/releases/latest"><strong>Download APK</strong></a>
-  &nbsp;·&nbsp; <a href="https://github.com/mitschud/DirtyFrag/issues">Report an issue</a>
+  <a href="https://github.com/aayy-dev/dirtyfrag/releases/latest"><strong>Download APK</strong></a>
+  &nbsp;·&nbsp; <a href="https://github.com/aayy-dev/dirtyfrag/issues">Report an issue</a>
   &nbsp;·&nbsp; <a href="https://github.com/diabl0w/DFRoot">Upstream DFRoot</a>
 </p></div>
 
@@ -23,7 +23,7 @@ Compatibility depends on the device's kernel and security patches. Root is **eph
 
 ## Install
 
-1. Install the DirtyFrag APK from [Releases](https://github.com/mitschud/DirtyFrag/releases/latest).
+1. Install the DirtyFrag APK from [Releases](https://github.com/aayy-dev/dirtyfrag/releases/latest).
 2. Install an SU manager that **ships `libksud.so`**:
    - Samsung - **required**:
      - [diabl0w's KernelSU](https://github.com/diabl0w/KernelSU/releases)
@@ -41,7 +41,7 @@ Compatibility depends on the device's kernel and security patches. Root is **eph
 
 > [!NOTE]
 > Pre-release builds of `master` are not published to Releases. Take the **`DFRoot`** artifact of the
-> latest green [Build](https://github.com/mitschud/DirtyFrag/actions/workflows/build.yml) run: it is a
+> latest green [Build](https://github.com/aayy-dev/dirtyfrag/actions/workflows/build.yml) run: it is a
 > signed release build - the workflow restores the `KEYSTORE` secret into `app/keystore.jks` and runs
 > `assembleRelease` - and inside the artifact the APK is at
 > `app/build/outputs/apk/release/dirtyfrag.apk`. Tagged and untagged builds go through that same

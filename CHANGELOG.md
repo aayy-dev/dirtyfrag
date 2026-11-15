@@ -98,7 +98,7 @@ Based on upstream DFRoot 4.6 - 4.7, merged into this fork. `versionCode` 34, `ve
   copied to disk, nothing is injected into `system_server`, no sepolicy rule is added, and nothing stays
   resident - `ps -A` after a run holds none of it. Measured on the SM-S931B. Not watched end to end:
   booting patched firmware into Odin and seeing it accepted. The full write-up, including that gap, is
-  [docs/d2-download-mode-writer.md](https://github.com/mitschud/DirtyFrag/blob/v1.17/docs/d2-download-mode-writer.md).
+  [docs/d2-download-mode-writer.md](https://github.com/aayy-dev/dirtyfrag/blob/v1.17/docs/d2-download-mode-writer.md).
 
 ### Autorun Writer honours its word while the app is running
 - A reboot clears the vendor byte, and DirtyFrag's root is a page-cache patch, so with the switch on and
