@@ -9,6 +9,8 @@ import android.content.pm.PackageManager;
 import android.os.PowerManager;
 import android.util.Log;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /**
  * Auto-root on boot. Safety rules learned in the field:
  *  - A failed run disables the receiver; the user re-enables it in the app.
@@ -23,6 +25,13 @@ import android.util.Log;
  */
 public class BootReceiver extends BroadcastReceiver implements IReporter {
     private static final String TAG = "dfroot";
+
+    /** Prevents the second boot broadcast (BOOT_COMPLETED after LOCKED_BOOT_COMPLETED, or
+     *  vice versa) from starting a duplicate run. The loser of ExploitRunner's synchronized
+     *  lock would find /dev/df present but su not yet bound, read that as a failure, and
+     *  disable the receiver — turning a successful root into a disabled-on-next-boot.
+     *  Static: resets when the process dies, which is every cold boot. */
+    private static final AtomicBoolean sRunStarted = new AtomicBoolean(false);
 
     @Override
     public void report(String msg) {
@@ -50,6 +59,11 @@ public class BootReceiver extends BroadcastReceiver implements IReporter {
             Log.i(TAG, "boot: expert mode off - autorun skipped");
             return;
         }
+        if (!sRunStarted.compareAndSet(false, true)) {
+            Log.i(TAG, "boot: run already claimed by an earlier broadcast, ignoring "
+                    + intent.getAction());
+            return;
+        }
         boolean autoSoftReboot = deCtx.getSharedPreferences("dfroot", Context.MODE_PRIVATE)
                 .getBoolean("auto_soft_reboot", false);
         // auto_soft_reboot=true: on success, ksud triggers its OWN soft reboot
@@ -58,33 +72,39 @@ public class BootReceiver extends BroadcastReceiver implements IReporter {
         // session. With it off, the exploit still roots the device but nothing
         // reboots. bootstrap reads this from the pref, not from argv.
         deCtx.getSharedPreferences("dfroot", Context.MODE_PRIVATE)
-                .edit().putBoolean("soft_reboot", autoSoftReboot).apply();
+                .edit().putBoolean("soft_reboot", autoSoftReboot).commit();
 
         PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dfroot:boot");
         wl.acquire();
-        new Thread(() -> {
-            boolean ok = false;
-            try {
-                int rc = ExploitRunner.run(deCtx, this);
-                Log.i(TAG, "boot: exploit rc=" + rc);
-                ok = rc == 0;
-            } catch (Exception e) {
-                Log.e(TAG, "boot: exploit exception", e);
-            } finally {
-                wl.release();
-            }
-            // The download-mode byte is per boot, and the only thing that can write it is the su
-            // this run just put back, so re-arming belongs here and nowhere earlier.
-            if (ok) armD2Vault(deCtx);
-            if (!ok) {
-                Log.i(TAG, "boot: failed - disabling autorun interlock");
-                context.getPackageManager().setComponentEnabledSetting(
-                        new ComponentName(context, BootReceiver.class),
-                        PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                        PackageManager.DONT_KILL_APP);
-            }
-        }, "dfroot-boot").start();
+        try {
+            new Thread(() -> {
+                boolean ok = false;
+                try {
+                    int rc = ExploitRunner.run(deCtx, this);
+                    Log.i(TAG, "boot: exploit rc=" + rc);
+                    ok = rc == 0;
+                } catch (Exception e) {
+                    Log.e(TAG, "boot: exploit exception", e);
+                } finally {
+                    wl.release();
+                }
+                if (ok) armD2Vault(deCtx);
+                if (!ok && !RootState.hooked()) {
+                    Log.i(TAG, "boot: failed and no hook established - disabling autorun");
+                    context.getPackageManager().setComponentEnabledSetting(
+                            new ComponentName(context, BootReceiver.class),
+                            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                            PackageManager.DONT_KILL_APP);
+                } else if (!ok) {
+                    Log.i(TAG, "boot: rc!=0 but /dev/df present - another caller already "
+                            + "hooked this boot, not disabling receiver");
+                }
+            }, "dfroot-boot").start();
+        } catch (Throwable t) {
+            wl.release();
+            Log.e(TAG, "boot: failed to start exploit thread", t);
+        }
     }
 
     /**
