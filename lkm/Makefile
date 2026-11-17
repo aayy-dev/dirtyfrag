@@ -7,7 +7,7 @@ obj-m += dfroot.o
 OBJCOPY ?= llvm-objcopy
 
 CFLAGS_dfroot.o := -Os -Qn -fno-addrsig -fno-asynchronous-unwind-tables \
-                   -fno-unwind-tables
+                   -fno-unwind-tables -fno-sanitize=cfi
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) \
