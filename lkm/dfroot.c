@@ -53,22 +53,14 @@ static int __nocfi __init dfroot_init(void)
     int ret;
     char **pp;
 
-    pr_emerg("dfroot: init started\n");
-
-    // UMH command to run. Upstream 4.2-4.5 replaced the old
-    // "touch /dev/dfm0; rmmod oplus_* 2>/dev/null; exit 0" chain. Those rmmods
-    // tripped the Oppo/OnePlus security anti-tamper reset (our issue #21), and
-    // because `sh -c` returns the exit code of the LAST command, a failing
-    // rmmod also made the helper report "returned 256" everywhere else, which
-    // is what killed the run at the verify stage (our issue #5). The vendor
-    // hardening checks are now patched in-kernel with aarch64_insn_patch_text,
-    // the helper only touches the marker and execs bootstrap, and the call is
-    // UMH_WAIT_EXEC, so there is no child exit status left to leak.
+    // UMH command
     static const char sh[] = "/system/bin/sh";
     static const char bootstrap[] = "/data/user_de/0/df.root/bootstrap";
     static char cmd[512];
     static char *envp[] = { "PATH=/system/bin", NULL };
     static char *argv[] = { (char *)sh, "-c", cmd, NULL };
+
+    pr_emerg("dfroot: init started\n");
     snprintf(cmd, sizeof(cmd), "touch /dev/dfm0; echo -n 'u:r:init:s0' > /proc/self/attr/exec; exec %s", bootstrap);
 
     // Symbol finder
