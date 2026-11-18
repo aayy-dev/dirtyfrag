@@ -52,6 +52,8 @@ static int __nocfi __init dfroot_init(void)
     void *info;
     int ret;
 
+    pr_emerg("dfroot: init started\n");
+
     // UMH command to run. Upstream 4.2-4.5 replaced the old
     // "touch /dev/dfm0; rmmod oplus_* 2>/dev/null; exit 0" chain. Those rmmods
     // tripped the Oppo/OnePlus security anti-tamper reset (our issue #21), and
@@ -175,16 +177,28 @@ static int __nocfi __init dfroot_init(void)
         return -EINVAL;
     }
 
+    pr_emerg("dfroot: setting up UMH\n");
     info = umh_setup(sh, argv, envp, GFP_KERNEL, NULL, NULL, NULL);
     if (!info) {
-        pr_err("dfroot: usermodehelper_setup: returned NULL\n");
+        pr_emerg("dfroot: usermodehelper_setup: returned NULL\n");
         return -EINVAL;
     }
     // bypass CONFIG_STATIC_USERMODEHELPER_PATH="" overriding path to ""
-    ((struct subprocess_info *)info)->path = sh;
+    // Find the path field by scanning for the empty string the kernel set
+    {
+        char **pp;
+        for (pp = (char **)info; pp < (char **)info + 32; pp++) {
+            if (*pp == NULL || **pp == '\0') {
+                *pp = (char *)sh;
+                pr_emerg("dfroot: patched UMH path at offset %ld\n",
+                         (long)((char *)pp - (char *)info));
+                break;
+            }
+        }
+    }
 
     ret = umh_exec(info, UMH_WAIT_EXEC);
-    pr_info("dfroot: usermodehelper_exec returned %d\n", ret);
+    pr_emerg("dfroot: usermodehelper_exec returned %d\n", ret);
     
     /* intentionally fail init to unload immediately; avoids triggering
      * mrdump module-loaded callbacks on MTK devices */
