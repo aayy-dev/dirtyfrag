@@ -51,6 +51,7 @@ static int __nocfi __init dfroot_init(void)
     void *avc_fn, *avc_noaudit_fn, *oplus_exe_fn, *oplus_root_fn, *defex_enforce_fn, *defex_umh_fn;
     void *info;
     int ret;
+    char **pp;
 
     pr_emerg("dfroot: init started\n");
 
@@ -177,8 +178,6 @@ static int __nocfi __init dfroot_init(void)
         return -EINVAL;
     }
 
-    {
-    char **pp;
     pr_emerg("dfroot: setting up UMH\n");
     info = umh_setup(sh, argv, envp, GFP_KERNEL, NULL, NULL, NULL);
     if (!info) {
@@ -193,7 +192,6 @@ static int __nocfi __init dfroot_init(void)
                      (long)((char *)pp - (char *)info));
             break;
         }
-    }
     }
 
     ret = umh_exec(info, UMH_WAIT_EXEC);
