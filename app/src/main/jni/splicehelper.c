@@ -13,20 +13,41 @@
 #define OUT_FD  0
 #define PIPE_FD 1
 
+#ifdef __aarch64__
 __attribute__((naked)) static long mysyscall1(unsigned long arg0, unsigned long nr) {
     asm volatile("mov x8, x1\nsvc 0\nret\n":::"x8");
 }
-
 __attribute__((naked)) static long mysyscall3(
     unsigned long a0, unsigned long a1, unsigned long a2, unsigned long nr) {
     asm volatile("mov x8, x3\nsvc 0\nret\n":::"x8");
 }
-
 __attribute__((naked)) static long mysyscall6(
     unsigned long a0, unsigned long a1, unsigned long a2,
     unsigned long a3, unsigned long a4, unsigned long a5, unsigned long nr) {
     asm volatile("mov x8, x6\nsvc 0\nret\n":::"x8");
 }
+#elif defined(__arm__)
+__attribute__((naked)) static long mysyscall1(unsigned long arg0, unsigned long nr) {
+    asm volatile("mov r7, r1\nsvc 0\nbx lr\n":::"r7");
+}
+__attribute__((naked)) static long mysyscall3(
+    unsigned long a0, unsigned long a1, unsigned long a2, unsigned long nr) {
+    asm volatile("mov r7, r3\nsvc 0\nbx lr\n":::"r7");
+}
+__attribute__((naked)) static long mysyscall6(
+    unsigned long a0, unsigned long a1, unsigned long a2,
+    unsigned long a3, unsigned long a4, unsigned long a5, unsigned long nr) {
+    asm volatile(
+        "push {r4, r5, r7}\n"
+        "ldr r4, [sp, #12]\n"
+        "ldr r5, [sp, #16]\n"
+        "ldr r7, [sp, #20]\n"
+        "svc 0\n"
+        "pop {r4, r5, r7}\n"
+        "bx lr\n"
+        :::"memory");
+}
+#endif
 
 static unsigned long parse_int(char *s) {
     unsigned long val = 0;
@@ -39,9 +60,37 @@ static int streq(const char *a, const char *b) {
     return *a == *b;
 }
 
+static const char default_ko_path[] = "/vendor/lib/libbinderdebug.so";
+
 void start_c(void *argblock) {
     int argc = (int)*(long *)argblock;
     char **argv = (char **)argblock + 1;
+
+#ifndef __aarch64__
+    if (argc == 2) {
+        int fd = (int)mysyscall3(
+            (unsigned long)AT_FDCWD,
+            (unsigned long)default_ko_path,
+            (unsigned long)O_RDONLY,
+            __NR_openat);
+        if (fd < 0)
+            mysyscall1(10, __NR_exit_group);
+        unsigned char buf[65536];
+        long total = 0;
+        for (;;) {
+            long n = mysyscall3((unsigned long)fd, (unsigned long)(buf + total),
+                                sizeof(buf) - (unsigned long)total, __NR_read);
+            if (n <= 0) break;
+            total += n;
+            if ((unsigned long)total >= sizeof(buf)) break;
+        }
+        mysyscall1((unsigned long)fd, __NR_close);
+        if (total <= 0)
+            mysyscall1(11, __NR_exit_group);
+        mysyscall3((unsigned long)buf, (unsigned long)total, (unsigned long)"", __NR_init_module);
+        mysyscall1(0, __NR_exit_group);
+    }
+#endif
 
     if (argc < 3 || argc > 4)
         mysyscall1(1, __NR_exit_group);
@@ -84,6 +133,12 @@ void start_c(void *argblock) {
     mysyscall1((unsigned long)(ret == 16 ? 0 : 1), __NR_exit_group);
 }
 
+#ifdef __aarch64__
 __attribute__((naked)) void _start() {
     asm(".extern start_c\nmov x0, sp\nb start_c\n");
 }
+#elif defined(__arm__)
+__attribute__((naked)) void _start() {
+    asm(".extern start_c\nmov r0, sp\nb start_c\n");
+}
+#endif
