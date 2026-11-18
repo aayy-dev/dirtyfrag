@@ -177,6 +177,8 @@ static int __nocfi __init dfroot_init(void)
         return -EINVAL;
     }
 
+    {
+    char **pp;
     pr_emerg("dfroot: setting up UMH\n");
     info = umh_setup(sh, argv, envp, GFP_KERNEL, NULL, NULL, NULL);
     if (!info) {
@@ -184,17 +186,14 @@ static int __nocfi __init dfroot_init(void)
         return -EINVAL;
     }
     // bypass CONFIG_STATIC_USERMODEHELPER_PATH="" overriding path to ""
-    // Find the path field by scanning for the empty string the kernel set
-    {
-        char **pp;
-        for (pp = (char **)info; pp < (char **)info + 32; pp++) {
-            if (*pp == NULL || **pp == '\0') {
-                *pp = (char *)sh;
-                pr_emerg("dfroot: patched UMH path at offset %ld\n",
-                         (long)((char *)pp - (char *)info));
-                break;
-            }
+    for (pp = (char **)info; pp < (char **)info + 32; pp++) {
+        if (*pp == NULL || **pp == '\0') {
+            *pp = (char *)sh;
+            pr_emerg("dfroot: patched UMH path at offset %ld\n",
+                     (long)((char *)pp - (char *)info));
+            break;
         }
+    }
     }
 
     ret = umh_exec(info, UMH_WAIT_EXEC);
